@@ -1153,7 +1153,7 @@ Generate 4 DISTINCT redesign concepts. For each concept:
 Respond ONLY with valid JSON, no markdown, no backticks:
 {"concepts":[{"name":"...","description":"...","atmosphere":"...","items":[{"name":"...","category":"...","detail":"...","isNew":true,"price":"...","hotspot":{"x":30,"y":60},"links":{"amazon":"...","google":"...","ebay":"...","etsy":"..."},"secondhand":false}]}]}`;
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("http://localhost:3001/api/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
