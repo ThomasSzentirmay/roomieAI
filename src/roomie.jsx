@@ -1000,7 +1000,29 @@ const Styles = () => (
       box-shadow: 0 4px 20px rgba(255,77,28,0.4);
     }
 
-    /* ── ERROR ── */
+    /* GENERATING OVERLAY */
+    .img-generating-overlay {
+      position: absolute; inset: 0; z-index: 3;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(2px);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 10px;
+    }
+    .img-generating-overlay span {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6rem; color: var(--white);
+      letter-spacing: 0.15em; text-transform: uppercase;
+    }
+    .img-generating-spinner {
+      width: 28px; height: 28px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    /* ERROR */
     .error-box {
       margin: 0 20px 16px;
       background: #1a0a0a;
@@ -1066,6 +1088,7 @@ export default function Roomie() {
   const [budget, setBudget] = useState("");
   const [results, setResults] = useState([]);
   const [error, setError] = useState("");
+  const [loadingStage, setLoadingStage] = useState(""); // "analyzing" | "generating"
   const [selectedCard, setSelectedCard] = useState(null);
   const [highlightedProduct, setHighlightedProduct] = useState(null);
   const [showSheet, setShowSheet] = useState(false);
@@ -1194,8 +1217,52 @@ Respond ONLY with valid JSON, no markdown, no backticks:
       }
 
       const imageUrls = images.map(f => URL.createObjectURL(f));
-      setResults(parsed.concepts.map((c, i) => ({ ...c, imageUrl: imageUrls[i % imageUrls.length] })));
+
+      // Set concepts first with original images so UI appears fast
+      const initialResults = parsed.concepts.map((c, i) => ({
+        ...c,
+        imageUrl: imageUrls[i % imageUrls.length],
+        imageGenerating: true,
+      }));
+      setResults(initialResults);
       setPage("results");
+
+      // Now generate AI images for each concept in the background
+      setLoadingStage("generating");
+      const firstImageBase64 = await toBase64(images[0]);
+      const firstMimeType = images[0].type;
+
+      parsed.concepts.forEach(async (concept, i) => {
+        try {
+          const imagePrompt = `${concept.name} interior design style: ${concept.atmosphere} ${concept.description}. Professional interior photography, realistic, high quality room photo.`;
+
+          const imgRes = await fetch('http://localhost:3001/api/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: imagePrompt,
+              imageBase64: firstImageBase64,
+              mimeType: firstMimeType,
+            })
+          });
+
+          if (imgRes.ok) {
+            const { imageUrl } = await imgRes.json();
+            setResults(prev => prev.map((r, idx) =>
+              idx === i ? { ...r, imageUrl, imageGenerating: false } : r
+            ));
+          } else {
+            // Keep original photo if generation fails
+            setResults(prev => prev.map((r, idx) =>
+              idx === i ? { ...r, imageGenerating: false } : r
+            ));
+          }
+        } catch {
+          setResults(prev => prev.map((r, idx) =>
+            idx === i ? { ...r, imageGenerating: false } : r
+          ));
+        }
+      });
     } catch (err) {
       setError(`Something went wrong: ${err.message}. Please try again.`);
       setPage("input");
@@ -1333,11 +1400,18 @@ Respond ONLY with valid JSON, no markdown, no backticks:
             <div className="full-screen">
               <div className="loading-screen">
                 <div className="loading-ring" />
-                <div className="loading-title">DESIGNING YOUR SPACE</div>
+                <div className="loading-title">
+                  {loadingStage === "generating" ? "GENERATING IMAGES" : "ANALYSING ROOM"}
+                </div>
                 <div className="loading-dots">
                   <span /><span /><span />
                 </div>
-                <div className="loading-sub">AI is scanning your room{"\n"}and crafting redesign concepts…</div>
+                <div className="loading-sub">
+                  {loadingStage === "generating"
+                    ? "AI is rendering your redesigned room…"
+                    : "AI is scanning your room\nand crafting redesign concepts…"
+                  }
+                </div>
               </div>
             </div>
           )}
@@ -1357,6 +1431,12 @@ Respond ONLY with valid JSON, no markdown, no backticks:
                   <div className="result-card" key={i} onClick={() => { setSelectedCard(r); setHighlightedProduct(null); }}>
                     <div className="result-img-wrap">
                       <img src={r.imageUrl} alt={r.name} />
+                      {r.imageGenerating && (
+                        <div className="img-generating-overlay">
+                          <div className="img-generating-spinner" />
+                          <span>Rendering…</span>
+                        </div>
+                      )}
                       <div className="result-overlay" />
                       <div className="result-hotspots">
                         {r.items.map((p, j) => (
