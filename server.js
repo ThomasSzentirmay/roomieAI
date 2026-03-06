@@ -10,12 +10,11 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const REPLICATE_API_KEY = process.env.REPLICATE_API_KEY
 
 if (!ANTHROPIC_API_KEY) {
-  console.error('❌ No Anthropic API key found')
+  console.error('❌ No Anthropic API key found — check your .env file')
   process.exit(1)
 }
-
 if (!REPLICATE_API_KEY) {
-  console.error('❌ No Replicate API key found')
+  console.error('❌ No Replicate API key found — check your .env file')
   process.exit(1)
 }
 
@@ -44,7 +43,7 @@ app.post('/api/messages', async (req, res) => {
       return res.status(response.status).json(data)
     }
 
-    console.log('✅ Anthropic response — stop_reason:', data.stop_reason, '| tokens:', data.usage?.output_tokens)
+    console.log('✅ Anthropic done — stop_reason:', data.stop_reason, '| tokens:', data.usage?.output_tokens)
     res.json(data)
 
   } catch (err) {
@@ -53,15 +52,14 @@ app.post('/api/messages', async (req, res) => {
   }
 })
 
-// ── Replicate image generation ───────────────────────────────────────────────
+// ── Replicate SDXL text-to-image ─────────────────────────────────────────────
 app.post('/api/generate-image', async (req, res) => {
-  const { prompt, imageBase64, mimeType } = req.body
+  const { prompt } = req.body
 
   try {
-    console.log('🎨 Generating image for prompt:', prompt.slice(0, 80) + '...')
+    console.log('🎨 Generating image — prompt:', prompt.slice(0, 100) + '...')
 
-    // Start the prediction
-    const startRes = await fetch('https://api.replicate.com/v1/models/stability-ai/stable-diffusion-img2img/versions/15a3689ee13b0d2616e98820eca31d4af4a36106d57a9oe786ea5026107f12098/predictions', {
+    const startRes = await fetch('https://api.replicate.com/v1/models/stability-ai/sdxl/predictions', {
       method: 'POST',
       headers: {
         'Authorization': `Token ${REPLICATE_API_KEY}`,
@@ -69,26 +67,26 @@ app.post('/api/generate-image', async (req, res) => {
       },
       body: JSON.stringify({
         input: {
-          prompt: prompt,
-          image: `data:${mimeType};base64,${imageBase64}`,
-          prompt_strength: 0.6,
-          num_inference_steps: 30,
+          prompt: prompt + ', professional interior design photography, photorealistic, high resolution, beautiful lighting',
+          negative_prompt: 'blurry, cartoon, illustration, painting, low quality, dark, ugly, deformed',
+          width: 768,
+          height: 512,
+          num_inference_steps: 25,
           guidance_scale: 7.5,
-          scheduler: 'K_EULER',
+          num_outputs: 1,
         }
       })
     })
 
+    const prediction = await startRes.json()
+
     if (!startRes.ok) {
-      // Fall back to text-to-image if img2img fails
-      console.log('⚠️ img2img failed, trying text2img...')
-      return generateText2Img(prompt, res)
+      console.error('❌ Replicate start error:', JSON.stringify(prediction))
+      return res.status(500).json({ error: { message: prediction.detail || 'Failed to start generation' } })
     }
 
-    const prediction = await startRes.json()
     console.log('⏳ Prediction started:', prediction.id)
 
-    // Poll for result
     const imageUrl = await pollPrediction(prediction.id)
     console.log('✅ Image ready:', imageUrl)
     res.json({ imageUrl })
@@ -99,37 +97,10 @@ app.post('/api/generate-image', async (req, res) => {
   }
 })
 
-async function generateText2Img(prompt, res) {
-  try {
-    const startRes = await fetch('https://api.replicate.com/v1/models/stability-ai/sdxl/predictions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Token ${REPLICATE_API_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'wait=60',
-      },
-      body: JSON.stringify({
-        input: {
-          prompt: `interior design photo, ${prompt}, professional photography, high quality, realistic`,
-          negative_prompt: 'blurry, low quality, cartoon, illustration',
-          width: 768,
-          height: 512,
-          num_inference_steps: 30,
-          guidance_scale: 7.5,
-        }
-      })
-    })
-
-    const prediction = await startRes.json()
-    const imageUrl = await pollPrediction(prediction.id)
-    res.json({ imageUrl })
-  } catch (err) {
-    res.status(500).json({ error: { message: err.message } })
-  }
-}
-
+// ── Poll until done ───────────────────────────────────────────────────────────
 async function pollPrediction(id) {
   const maxAttempts = 60
+
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(r => setTimeout(r, 2000))
 
@@ -145,9 +116,10 @@ async function pollPrediction(id) {
     }
 
     if (data.status === 'failed' || data.status === 'canceled') {
-      throw new Error(`Prediction ${data.status}: ${data.error || 'unknown error'}`)
+      throw new Error(`Prediction ${data.status}: ${data.error || 'unknown'}`)
     }
   }
+
   throw new Error('Image generation timed out')
 }
 

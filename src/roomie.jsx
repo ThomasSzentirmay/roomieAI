@@ -1141,40 +1141,41 @@ export default function Roomie() {
       const isCleanUp = allStyles.includes("Clean Up");
       const isCasualRearrange = allStyles.includes("Casual Rearrangement");
 
-      const prompt = `You are Roomie, an expert interior design AI and personal shopper. The user has uploaded ${images.length} photo(s) of their ${effectiveRoomType}.
+      const prompt = `You are Roomie, an expert interior design AI. The user has uploaded ${images.length} photo(s) of their ${effectiveRoomType}.
 
 Design preferences:
 - Styles: ${allStyles.join(", ") || "not specified"}
 - Vibe: "${vibe || "not specified"}"
 - Budget: ${budget || "flexible"}
 
-${isCleanUp ? "SPECIAL MODE — CLEAN UP: Focus on decluttering, organizing, and tidying. Identify every visible item that needs a storage solution, organizer, or cleaning product." : ""}
-${isCasualRearrange ? "SPECIAL MODE — CASUAL REARRANGEMENT: Focus on rearranging existing furniture and adding small accent items. No major purchases — think repositioning, throw pillows, rugs, lighting tweaks, and small decorative objects." : ""}
+${isCleanUp ? "SPECIAL MODE — CLEAN UP: Suggest only storage, organisation and cleaning products to add." : ""}
+${isCasualRearrange ? "SPECIAL MODE — CASUAL REARRANGEMENT: Suggest only small new items to add — cushions, throws, plants, candles, small decor. No big furniture." : ""}
 
-CRITICAL TASK — MAKE EVERYTHING SHOPPABLE:
-Scan the photo(s) carefully. Identify EVERY visible item — furniture, lighting, rugs, curtains, wall art, plants, cushions, storage, decor, appliances, EVERYTHING. Each item must be a shoppable hotspot.
+Generate exactly 3 DISTINCT redesign concepts.
 
-Generate 4 DISTINCT redesign concepts. For each concept:
-1. "name": Short punchy concept name
-2. "description": One-sentence transformation
-3. "atmosphere": One sentence on the feel after transformation
-4. "items": Array of ALL shoppable items — target 6-8 items per concept, covering the key elements of the room. For EACH item:
-   - "name": Specific product name (e.g. "IKEA KALLAX 4x4 Shelving White")
-   - "category": Item type (e.g. "Sofa", "Floor Lamp", "Rug")
-   - "detail": 1-2 sentences on what it is and why it works
-   - "isNew": true if new item to add, false if upgrading something already there
+STRICT RULE FOR ITEMS: Only list items the user needs to PURCHASE AND ADD to the room. Never list things they already own, and never list rearrangements of existing furniture (they can't buy something they already have). Every item in the list must be something new to buy.
+
+For each concept:
+1. "name": Short punchy name (max 4 words)
+2. "description": One sentence describing what NEW items transform the room
+3. "atmosphere": One sentence on how it will feel after
+4. "imagePrompt": A detailed text prompt for an AI image generator describing this room fully redesigned in this style — include room type, style, colors, furniture, lighting, mood. Be vivid and specific. Start with "Interior design photo of a"
+5. "items": Exactly 5 NEW items to purchase. For EACH:
+   - "name": Specific product (e.g. "West Elm Andes Velvet Sofa, Warm Sand")
+   - "category": Type (e.g. "Rug", "Floor Lamp", "Wall Art")
+   - "detail": One sentence — what it is and how it changes the room
    - "price": Realistic range (e.g. "$49–$89")
-   - "hotspot": { "x": 5-95, "y": 5-95 } exact position in image as %. Spread across the full image, no two within 8 units.
+   - "hotspot": { "x": 10-90, "y": 10-90 } where in the image this item would sit. Spread them across different areas.
    - "links": {
-       "amazon": "https://www.amazon.com/s?k=URL-encoded-query",
-       "google": "https://www.google.com/search?tbm=shop&q=URL-encoded-query",
-       "ebay": "https://www.ebay.com/sch/i.html?_nkw=URL-encoded-query",
-       "etsy": "https://www.etsy.com/search?q=URL-encoded-query"
+       "amazon": "https://www.amazon.com/s?k=product+name",
+       "google": "https://www.google.com/search?tbm=shop&q=product+name",
+       "ebay": "https://www.ebay.com/sch/i.html?_nkw=product+name",
+       "etsy": "https://www.etsy.com/search?q=product+name"
      }
-   - "secondhand": true if great to buy secondhand
+   - "secondhand": true if good to buy secondhand
 
 Respond ONLY with valid JSON, no markdown, no backticks:
-{"concepts":[{"name":"...","description":"...","atmosphere":"...","items":[{"name":"...","category":"...","detail":"...","isNew":true,"price":"...","hotspot":{"x":30,"y":60},"links":{"amazon":"...","google":"...","ebay":"...","etsy":"..."},"secondhand":false}]}]}`;
+{"concepts":[{"name":"...","description":"...","atmosphere":"...","imagePrompt":"...","items":[{"name":"...","category":"...","detail":"...","price":"...","hotspot":{"x":30,"y":60},"links":{"amazon":"...","google":"...","ebay":"...","etsy":"..."},"secondhand":false}]}]}`;
 
       const response = await fetch("http://localhost:3001/api/messages", {
         method: "POST",
@@ -1218,8 +1219,8 @@ Respond ONLY with valid JSON, no markdown, no backticks:
 
       const imageUrls = images.map(f => URL.createObjectURL(f));
 
-      // Set concepts first with original images so UI appears fast
-      const initialResults = parsed.concepts.map((c, i) => ({
+      // Show results immediately with original photos as placeholders
+      const initialResults = parsed.concepts.slice(0, 3).map((c, i) => ({
         ...c,
         imageUrl: imageUrls[i % imageUrls.length],
         imageGenerating: true,
@@ -1227,41 +1228,30 @@ Respond ONLY with valid JSON, no markdown, no backticks:
       setResults(initialResults);
       setPage("results");
 
-      // Now generate AI images for each concept in the background
-      setLoadingStage("generating");
-      const firstImageBase64 = await toBase64(images[0]);
-      const firstMimeType = images[0].type;
-
-      parsed.concepts.forEach(async (concept, i) => {
-        try {
-          const imagePrompt = `${concept.name} interior design style: ${concept.atmosphere} ${concept.description}. Professional interior photography, realistic, high quality room photo.`;
-
-          const imgRes = await fetch('http://localhost:3001/api/generate-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: imagePrompt,
-              imageBase64: firstImageBase64,
-              mimeType: firstMimeType,
-            })
-          });
-
-          if (imgRes.ok) {
-            const { imageUrl } = await imgRes.json();
+      // Generate AI room images in the background using Claude's imagePrompt
+      initialResults.forEach((concept, i) => {
+        fetch('http://localhost:3001/api/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: concept.imagePrompt })
+        })
+        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then(data => {
+          if (data?.imageUrl) {
             setResults(prev => prev.map((r, idx) =>
-              idx === i ? { ...r, imageUrl, imageGenerating: false } : r
+              idx === i ? { ...r, imageUrl: data.imageUrl, imageGenerating: false } : r
             ));
           } else {
-            // Keep original photo if generation fails
             setResults(prev => prev.map((r, idx) =>
               idx === i ? { ...r, imageGenerating: false } : r
             ));
           }
-        } catch {
+        })
+        .catch(() => {
           setResults(prev => prev.map((r, idx) =>
             idx === i ? { ...r, imageGenerating: false } : r
           ));
-        }
+        });
       });
     } catch (err) {
       setError(`Something went wrong: ${err.message}. Please try again.`);
@@ -1422,35 +1412,42 @@ Respond ONLY with valid JSON, no markdown, no backticks:
               <div className="results-header">
                 <div>
                   <div style={{fontFamily:'Space Mono,monospace',fontSize:'0.52rem',color:'var(--accent)',letterSpacing:'0.15em',marginBottom:3}}>YOUR REDESIGNS</div>
-                  <div className="results-title">{results.length} <span>CONCEPTS</span></div>
+                  <div className="results-title">3 <span>CONCEPTS</span></div>
                 </div>
                 <button className="redesign-btn" onClick={() => setPage("input")}>← REDO</button>
               </div>
               <div className="results-scroll">
                 {results.map((r, i) => (
-                  <div className="result-card" key={i} onClick={() => { setSelectedCard(r); setHighlightedProduct(null); }}>
+                  <div className="result-card" key={`card-${i}`} onClick={() => { if (!r.imageGenerating) { setSelectedCard(r); setHighlightedProduct(null); } }}>
                     <div className="result-img-wrap">
                       <img src={r.imageUrl} alt={r.name} />
-                      {r.imageGenerating && (
-                        <div className="img-generating-overlay">
-                          <div className="img-generating-spinner" />
-                          <span>Rendering…</span>
-                        </div>
-                      )}
-                      <div className="result-overlay" />
-                      <div className="result-hotspots">
-                        {r.items.map((p, j) => (
-                          <div key={j} className="hotspot"
-                            style={{ left:`${p.hotspot?.x ?? 15+j*8}%`, top:`${p.hotspot?.y ?? 20+j*7}%` }}
-                            onClick={e => { e.stopPropagation(); setSelectedCard(r); setHighlightedProduct(j); }}
-                          >{j+1}</div>
-                        ))}
-                      </div>
+                      {r.imageGenerating
+                        ? (
+                          <div className="img-generating-overlay">
+                            <div className="img-generating-spinner" />
+                            <span>Rendering…</span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="result-overlay" />
+                            <div className="result-hotspots">
+                              {r.items.map((p, j) => (
+                                <div key={j} className="hotspot"
+                                  style={{ left:`${p.hotspot?.x ?? 15+j*18}%`, top:`${p.hotspot?.y ?? 20+j*15}%` }}
+                                  onClick={e => { e.stopPropagation(); setSelectedCard(r); setHighlightedProduct(j); }}
+                                >{j+1}</div>
+                              ))}
+                            </div>
+                          </>
+                        )
+                      }
                     </div>
                     <div className="result-meta">
                       <div className="result-concept">{r.name}</div>
                       <div className="result-desc">{r.description}</div>
-                      <div className="result-items-count">↳ {r.items.length} SHOPPABLE ITEMS — TAP TO EXPLORE</div>
+                      <div className="result-items-count">
+                        {r.imageGenerating ? "⏳ Generating your redesign…" : `↳ ${r.items.length} NEW ITEMS — TAP TO SHOP`}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1576,7 +1573,6 @@ Respond ONLY with valid JSON, no markdown, no backticks:
                         <div className="product-card-name">{p.name}</div>
                         <div className="product-card-meta">
                           <span className="product-category-tag">{p.category}</span>
-                          {p.isNew ? <span className="new-badge">NEW</span> : <span className="upgrade-badge">UPGRADE</span>}
                           {p.secondhand && <span className="secondhand-badge">♻ 2nd hand</span>}
                         </div>
                       </div>
