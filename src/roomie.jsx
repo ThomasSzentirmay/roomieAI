@@ -1135,7 +1135,7 @@ Generate 4 DISTINCT redesign concepts. For each concept:
 1. "name": Short punchy concept name
 2. "description": One-sentence transformation
 3. "atmosphere": One sentence on the feel after transformation
-4. "items": Array of ALL shoppable items — target 8-12, covering the entire room. For EACH item:
+4. "items": Array of ALL shoppable items — target 6-8 items per concept, covering the key elements of the room. For EACH item:
    - "name": Specific product name (e.g. "IKEA KALLAX 4x4 Shelving White")
    - "category": Item type (e.g. "Sofa", "Floor Lamp", "Rug")
    - "detail": 1-2 sentences on what it is and why it works
@@ -1158,7 +1158,7 @@ Respond ONLY with valid JSON, no markdown, no backticks:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 6000,
+          max_tokens: 8000,
           messages: [{ role: "user", content: [...imageContents, { type: "text", text: prompt }] }]
         })
       });
@@ -1167,8 +1167,32 @@ Respond ONLY with valid JSON, no markdown, no backticks:
       if (data.error) throw new Error(data.error.message);
 
       const text = data.content.map(b => b.text || "").join("");
-      const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+
+      // Robustly extract JSON — strip markdown fences, find the outermost { }
+      let clean = text.replace(/```json|```/g, "").trim();
+      const firstBrace = clean.indexOf("{");
+      const lastBrace = clean.lastIndexOf("}");
+      if (firstBrace === -1 || lastBrace === -1) throw new Error("No JSON found in response");
+      clean = clean.slice(firstBrace, lastBrace + 1);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(clean);
+      } catch (jsonErr) {
+        // If still failing, try to salvage by truncating to last complete concept
+        const lastCompleteIdx = clean.lastIndexOf('{"name"');
+        if (lastCompleteIdx > 0) {
+          // Find the last cleanly closed concept object
+          let truncated = clean.slice(0, lastCompleteIdx).trimEnd();
+          // Remove trailing comma if present
+          if (truncated.endsWith(",")) truncated = truncated.slice(0, -1);
+          truncated += "]}";
+          parsed = JSON.parse(truncated);
+        } else {
+          throw new Error("Could not parse AI response. Please try again.");
+        }
+      }
+
       const imageUrls = images.map(f => URL.createObjectURL(f));
       setResults(parsed.concepts.map((c, i) => ({ ...c, imageUrl: imageUrls[i % imageUrls.length] })));
       setPage("results");
